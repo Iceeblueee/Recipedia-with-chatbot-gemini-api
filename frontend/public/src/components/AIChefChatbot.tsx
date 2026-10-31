@@ -1,10 +1,11 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   X, Minus, Send, Sparkles, User,
-  RotateCcw, Clock, ChefHat, Zap, Brain
+  RotateCcw, Clock, ChefHat, Zap, Brain,
+  Paperclip, FileText, Music
 } from 'lucide-react';
-import { Recipe, ChatMessage } from '../types/recipe';
-import { askAIChef } from '../services/aiService';
+import { Recipe, ChatMessage, AttachmentInfo } from '../types/recipe';
+import { askAIChef, askAIChefWithFile } from '../services/aiService';
 
 interface AIChefChatbotProps {
   isOpen: boolean;
@@ -26,7 +27,19 @@ const SUGGESTED_PROMPTS = [
   { icon: '🔄', text: 'Cara mengganti bahan masakan?' },
 ];
 
-// ── Markdown → JSX renderer ─────────────────────────────────────────────────
+// ── Plain Text Renderer ──────────────────────────────────────────────────────
+// Membersihkan simbol markdown dari teks agar terbaca natural
+function stripMarkdown(text: string): string {
+  return text
+    .replace(/\*\*(.+?)\*\*/g, '$1')   // **bold** → bold
+    .replace(/\*(.+?)\*/g, '$1')       // *italic* → italic
+    .replace(/`(.+?)`/g, '$1')         // `code` → code
+    .replace(/~~(.+?)~~/g, '$1')       // ~~strike~~ → strike
+    .replace(/^#{1,6}\s+/gm, '')      // ## Heading → Heading
+    .replace(/^>\s+/gm, '')           // > quote → quote
+    .trim();
+}
+
 function renderFormattedText(text: string): React.ReactNode[] {
   const lines = text.split('\n');
   const result: React.ReactNode[] = [];
@@ -34,15 +47,16 @@ function renderFormattedText(text: string): React.ReactNode[] {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    const clean = stripMarkdown(line);
 
-    // Empty line → spacing
-    if (line.trim() === '') {
+    // Baris kosong → spasi
+    if (clean.trim() === '') {
       result.push(<div key={key++} className="h-2" />);
       continue;
     }
 
-    // Numbered list item: "1. text" or "1) text"
-    const numberedMatch = line.match(/^(\d+)[.)]\s+(.+)/);
+    // Daftar bernomor: "1. teks" atau "1) teks"
+    const numberedMatch = clean.match(/^(\d+)[.):]\s+(.+)/);
     if (numberedMatch) {
       const [, num, content] = numberedMatch;
       result.push(
@@ -50,77 +64,47 @@ function renderFormattedText(text: string): React.ReactNode[] {
           <span className="flex-shrink-0 w-5 h-5 rounded-full bg-[#526B50]/15 text-[#526B50] text-[10px] font-bold flex items-center justify-center mt-0.5">
             {num}
           </span>
-          <span className="text-[#282B25] leading-relaxed flex-1">{inlineFormat(content)}</span>
+          <span className="text-[#282B25] leading-relaxed flex-1">{content}</span>
         </div>
       );
       continue;
     }
 
-    // Bullet list item: "• text" or "- text" or "* text"
-    const bulletMatch = line.match(/^[•\-\*]\s+(.+)/);
+    // Daftar berpoin: "- teks" atau "• teks"
+    const bulletMatch = clean.match(/^[-•]\s+(.+)/);
     if (bulletMatch) {
       result.push(
         <div key={key++} className="flex gap-2.5 items-start mb-1">
           <span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-[#526B50] mt-2" />
-          <span className="text-[#282B25] leading-relaxed flex-1">{inlineFormat(bulletMatch[1])}</span>
+          <span className="text-[#282B25] leading-relaxed flex-1">{bulletMatch[1]}</span>
         </div>
       );
       continue;
     }
 
-    // Emoji tip line: starts with 💡 or similar
-    const tipMatch = line.match(/^(💡|✨|⚠️|🔥|⏱️|📝)\s*(.+)/);
+    // Baris dengan emoji tip: mulai dengan emoji khusus
+    const tipMatch = clean.match(/^(💡|✨|⚠️|🔥|⏱️|📝|👨‍🍳|🍽️)\s*(.+)/);
     if (tipMatch) {
       result.push(
         <div key={key++} className="flex gap-2 items-start bg-[#526B50]/8 rounded-lg px-3 py-2 my-1 border-l-2 border-[#526B50]/40">
           <span className="text-sm flex-shrink-0">{tipMatch[1]}</span>
-          <span className="text-[#282B25] text-xs leading-relaxed">{inlineFormat(tipMatch[2])}</span>
+          <span className="text-[#282B25] text-xs leading-relaxed">{tipMatch[2]}</span>
         </div>
       );
       continue;
     }
 
-    // Regular paragraph
+    // Paragraf biasa
     result.push(
       <p key={key++} className="text-[#282B25] leading-relaxed mb-0.5">
-        {inlineFormat(line)}
+        {clean}
       </p>
     );
   }
 
   return result;
 }
-
-// Handles inline **bold**, *italic*, and backtick `code` within a line
-function inlineFormat(text: string): React.ReactNode {
-  const parts: React.ReactNode[] = [];
-  // Regex: **bold**, *italic*, `code`
-  const regex = /(\*\*(.+?)\*\*|\*(.+?)\*|`(.+?)`)/g;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-  let key = 0;
-
-  while ((match = regex.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      parts.push(<span key={key++}>{text.slice(lastIndex, match.index)}</span>);
-    }
-    if (match[2]) {
-      parts.push(<strong key={key++} className="font-semibold text-[#526B50]">{match[2]}</strong>);
-    } else if (match[3]) {
-      parts.push(<em key={key++} className="italic">{match[3]}</em>);
-    } else if (match[4]) {
-      parts.push(<code key={key++} className="bg-[#F1F0E9] px-1 rounded text-[11px] font-mono">{match[4]}</code>);
-    }
-    lastIndex = match.index + match[0].length;
-  }
-
-  if (lastIndex < text.length) {
-    parts.push(<span key={key++}>{text.slice(lastIndex)}</span>);
-  }
-
-  return parts.length === 0 ? text : <>{parts}</>;
-}
-// ────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 
 // Animated typing dots component
 const TypingDots: React.FC = () => (
@@ -146,9 +130,11 @@ export const AIChefChatbot: React.FC<AIChefChatbotProps> = ({
   const [isMinimized, setIsMinimized] = useState(false);
   const [activeEngineMode, setActiveEngineMode] = useState<'demo' | 'live'>('demo');
   const [charCount, setCharCount] = useState(0);
+  const [pendingAttachment, setPendingAttachment] = useState<{ file: File; info: AttachmentInfo } | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -171,22 +157,34 @@ export const AIChefChatbot: React.FC<AIChefChatbotProps> = ({
 
   const handleSendMessage = async (textToSend?: string) => {
     const text = (textToSend || inputValue).trim();
-    if (!text || isTyping) return;
+    // Allow sending if there's text OR a pending attachment
+    if ((!text && !pendingAttachment) || isTyping) return;
+
+    const attachment = pendingAttachment?.info;
 
     const userMsg: ChatMessage = {
       id: `user-${Date.now()}`,
       sender: 'user',
-      content: text,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      content: text || (attachment ? `[${attachment.type === 'image' ? '📷 Foto' : attachment.type === 'audio' ? '🎵 Audio' : '📄 Dokumen'}: ${attachment.name}]` : ''),
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      attachment,
     };
 
     setMessages(prev => [...prev, userMsg]);
     setInputValue('');
     setCharCount(0);
     setIsTyping(true);
+    const capturedFile = pendingAttachment?.file;
+    const capturedAttachmentType = pendingAttachment?.info.type;
+    setPendingAttachment(null);
 
     try {
-      const response = await askAIChef(text);
+      let response;
+      if (capturedFile && capturedAttachmentType) {
+        response = await askAIChefWithFile(capturedFile, capturedAttachmentType, text || undefined);
+      } else {
+        response = await askAIChef(text);
+      }
       setActiveEngineMode(response.mode);
 
       const assistantMsg: ChatMessage = {
@@ -220,6 +218,48 @@ export const AIChefChatbot: React.FC<AIChefChatbotProps> = ({
   const handleResetChat = () => {
     setMessages([INITIAL_GREETING]);
     setActiveEngineMode('demo');
+    setPendingAttachment(null);
+  };
+
+  // ── File attachment handler ──────────────────────────────────────────────
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Detect type
+    let attachType: AttachmentInfo['type'];
+    if (file.type.startsWith('image/')) attachType = 'image';
+    else if (file.type.startsWith('audio/')) attachType = 'audio';
+    else attachType = 'document';
+
+    const previewUrl = attachType === 'image' ? URL.createObjectURL(file) : undefined;
+
+    setPendingAttachment({
+      file,
+      info: {
+        name: file.name,
+        type: attachType,
+        mimeType: file.type,
+        previewUrl,
+        size: file.size,
+      }
+    });
+
+    // Reset so same file can be re-selected
+    e.target.value = '';
+  };
+
+  const removePendingAttachment = () => {
+    if (pendingAttachment?.info.previewUrl) {
+      URL.revokeObjectURL(pendingAttachment.info.previewUrl);
+    }
+    setPendingAttachment(null);
+  };
+
+  const formatFileSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
   // ── Minimized pill view ─────────────────────────────────────────────────
@@ -341,9 +381,37 @@ export const AIChefChatbot: React.FC<AIChefChatbotProps> = ({
                     ? 'bg-white text-[#282B25] rounded-bl-sm border border-[#EAE8E0]'
                     : 'bg-gradient-to-br from-[#526B50] to-[#435842] text-white rounded-br-sm'
                 }`}>
+                  {/* Attachment preview inside user bubble */}
+                  {!isAssistant && msg.attachment && (
+                    <div className="mb-2">
+                      {msg.attachment.type === 'image' && msg.attachment.previewUrl ? (
+                        <img
+                          src={msg.attachment.previewUrl}
+                          alt={msg.attachment.name}
+                          className="rounded-xl max-h-40 max-w-full object-cover border border-white/20"
+                        />
+                      ) : msg.attachment.type === 'audio' ? (
+                        <div className="flex items-center gap-2 bg-white/15 rounded-xl px-3 py-2">
+                          <Music className="w-4 h-4 text-white/80 shrink-0" />
+                          <div className="min-w-0">
+                            <p className="text-xs font-medium text-white truncate">{msg.attachment.name}</p>
+                            <p className="text-[10px] text-white/60">{formatFileSize(msg.attachment.size)}</p>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2 bg-white/15 rounded-xl px-3 py-2">
+                          <FileText className="w-4 h-4 text-white/80 shrink-0" />
+                          <div className="min-w-0">
+                            <p className="text-xs font-medium text-white truncate">{msg.attachment.name}</p>
+                            <p className="text-[10px] text-white/60">{formatFileSize(msg.attachment.size)}</p>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
                   {isAssistant
                     ? <div className="space-y-0.5 text-sm">{renderFormattedText(msg.content)}</div>
-                    : <p className="text-sm leading-relaxed">{msg.content}</p>
+                    : msg.content ? <p className="text-sm leading-relaxed">{msg.content}</p> : null
                   }
                 </div>
 
@@ -439,10 +507,65 @@ export const AIChefChatbot: React.FC<AIChefChatbotProps> = ({
 
       {/* ── Input Area ────────────────────────────────────────────────── */}
       <div className="bg-white border-t border-[#EAE8E0] px-3 py-3 shrink-0">
+        {/* Pending attachment preview */}
+        {pendingAttachment && (
+          <div className="mb-2 flex items-center gap-2 bg-[#F7F6F2] border border-[#E0DED7] rounded-xl px-3 py-2">
+            {pendingAttachment.info.type === 'image' && pendingAttachment.info.previewUrl ? (
+              <img
+                src={pendingAttachment.info.previewUrl}
+                alt={pendingAttachment.info.name}
+                className="w-10 h-10 rounded-lg object-cover border border-[#E0DED7] shrink-0"
+              />
+            ) : pendingAttachment.info.type === 'audio' ? (
+              <div className="w-10 h-10 rounded-lg bg-[#526B50]/10 flex items-center justify-center shrink-0">
+                <Music className="w-5 h-5 text-[#526B50]" />
+              </div>
+            ) : (
+              <div className="w-10 h-10 rounded-lg bg-[#D98B55]/10 flex items-center justify-center shrink-0">
+                <FileText className="w-5 h-5 text-[#D98B55]" />
+              </div>
+            )}
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-semibold text-[#282B25] truncate">{pendingAttachment.info.name}</p>
+              <p className="text-[10px] text-[#A8A79F]">
+                {pendingAttachment.info.type === 'image' ? '📷 Foto' : pendingAttachment.info.type === 'audio' ? '🎵 Audio' : '📄 Dokumen'}
+                {' · '}{formatFileSize(pendingAttachment.info.size)}
+              </p>
+            </div>
+            <button
+              onClick={removePendingAttachment}
+              className="w-6 h-6 rounded-full bg-[#EAE8E0] hover:bg-red-100 hover:text-red-500 text-[#A8A79F] flex items-center justify-center transition-all shrink-0"
+              aria-label="Hapus lampiran"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
         <form
           onSubmit={e => { e.preventDefault(); handleSendMessage(); }}
           className="flex items-center gap-2"
         >
+          {/* Hidden file input */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*,audio/*,.pdf,.doc,.docx,.txt"
+            className="hidden"
+            onChange={handleFileSelect}
+          />
+
+          {/* Attach button */}
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isTyping || !!pendingAttachment}
+            title="Lampirkan file (foto, audio, atau dokumen)"
+            className="w-10 h-10 rounded-xl bg-[#F7F6F2] hover:bg-[#526B50]/10 border border-[#E0DED7] hover:border-[#526B50]/40 text-[#A8A79F] hover:text-[#526B50] flex items-center justify-center transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+          >
+            <Paperclip className="w-4 h-4" />
+          </button>
+
           <div className="flex-1 relative">
             <input
               ref={inputRef}
@@ -450,7 +573,7 @@ export const AIChefChatbot: React.FC<AIChefChatbotProps> = ({
               value={inputValue}
               onChange={e => { setInputValue(e.target.value); setCharCount(e.target.value.length); }}
               onKeyDown={handleKeyDown}
-              placeholder="Tanya resep, bahan, atau tips memasak..."
+              placeholder={pendingAttachment ? 'Tambahkan pesan (opsional)...' : 'Tanya resep, bahan, atau tips memasak...'}
               maxLength={500}
               disabled={isTyping}
               className="w-full bg-[#F7F6F2] border border-[#E0DED7] text-[#282B25] placeholder-[#A8A79F] text-sm rounded-xl px-4 py-2.5 pr-12 focus:outline-none focus:ring-2 focus:ring-[#526B50]/30 focus:border-[#526B50]/60 transition-all disabled:opacity-60"
@@ -463,7 +586,7 @@ export const AIChefChatbot: React.FC<AIChefChatbotProps> = ({
           </div>
           <button
             type="submit"
-            disabled={!inputValue.trim() || isTyping}
+            disabled={(!inputValue.trim() && !pendingAttachment) || isTyping}
             className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#526B50] to-[#435842] hover:from-[#435842] hover:to-[#354835] disabled:opacity-40 disabled:cursor-not-allowed text-white flex items-center justify-center transition-all duration-200 hover:scale-105 shadow-md hover:shadow-lg shrink-0"
             aria-label="Kirim pesan"
           >

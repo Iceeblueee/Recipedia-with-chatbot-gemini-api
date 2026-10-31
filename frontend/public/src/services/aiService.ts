@@ -1,4 +1,4 @@
-import { Recipe } from '../types/recipe';
+import { Recipe, AttachmentInfo } from '../types/recipe';
 import { RECIPES_DATA } from '../data/recipes';
 
 export interface AIResponse {
@@ -27,11 +27,17 @@ export async function askAIChef(
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 6000);
 
-      const systemPrompt = `Kamu adalah "AI Chef", asisten memasak ramah, profesional, dan inspiratif dari platform Recipedia. 
-Semua jawabanmu harus dalam bahasa Indonesia yang hangat, terstruktur rapi, dan mudah dipahami.
-Berikan tips memasak, resep, atau panduan takaran bahan secara akurat.
-Jika pengguna menyebutkan bahan yang dimiliki, rekomendasikan hidangan yang cocok dibuat dari bahan tersebut.
-Format teks dengan poin-poin yang mudah dibaca.
+      const systemPrompt = `Kamu adalah "AI Chef", asisten memasak ramah dan bersemangat dari platform Recipedia.
+
+Kamu hanya boleh membantu seputar resep masakan, bahan makanan, teknik memasak, tips dapur, dan segala hal tentang kuliner. Jika pertanyaan di luar topik tersebut, tolak dengan hangat dan sopan — jelaskan bahwa kamu hanya membantu soal masakan.
+
+ATURAN FORMAT PENULISAN (WAJIB):
+- JANGAN gunakan simbol markdown seperti **, *, #, atau backtick sama sekali.
+- Tulis teks biasa yang natural dan enak dibaca.
+- Gunakan angka (1. 2. 3.) untuk daftar bernomor, dan tanda hubung (-) untuk daftar berpoin.
+- Gunakan emoji secara natural agar jawaban terasa hidup.
+- Bahasa Indonesia yang hangat, santai, dan mudah dipahami semua orang.
+
 Pertanyaan pengguna: "${userQuery}"`;
 
       const response = await fetch('/api/generate-text', {
@@ -150,12 +156,94 @@ Pertanyaan pengguna: "${userQuery}"`;
       `• **Bahan yang kamu miliki**, contoh: *"Aku punya telur, nasi, dan bawang putih"*\n` +
       `• **Ide masakan tertentu**, contoh: *"Bagaimana cara memasak rendang daging?"*\n` +
       `• **Pengganti bahan**, contoh: *"Aku tidak punya susu untuk pancake"*\n` +
-      `• **Kategori waktu**, contoh: *"Rekomendasi resep praktis di bawah 30 menit"*\n\n` +
+      `• **Kategori waktu**, contoh: *"Rekomendasi resep praktis di bawah 30 menit"*\n` +
+      `• **📎 Kirim foto bahan, dokumen resep, atau rekaman audio** agar aku bisa menganalisisnya!\n\n` +
       `Berikut beberapa resep populer yang mungkin ingin kamu coba hari ini:`,
     suggestedRecipes: popularSample,
     mode: 'demo'
   };
 }
+
+// ─── Send message with file attachment ────────────────────────────────────────
+export async function askAIChefWithFile(
+  file: File,
+  attachmentType: AttachmentInfo['type'],
+  userText?: string
+): Promise<AIResponse> {
+  const endpointMap: Record<AttachmentInfo['type'], string> = {
+    image: '/api/generate-from-image',
+    document: '/api/generate-from-document',
+    audio: '/api/generate-from-audio',
+  };
+
+  const fieldNameMap: Record<AttachmentInfo['type'], string> = {
+    image: 'image',
+    document: 'document',
+    audio: 'audio',
+  };
+
+  const defaultPromptMap: Record<AttachmentInfo['type'], string> = {
+    image: 'Analisis bahan makanan atau masakan dalam gambar ini. Identifikasi apa yang ada di gambar dan rekomendasikan resep yang bisa dibuat. Jelaskan dalam bahasa Indonesia dengan format menarik.',
+    document: 'Tolong baca dokumen berikut dan ekstrak resep atau informasi memasak yang ada di dalamnya. Rangkum dalam bahasa Indonesia.',
+    audio: 'Tolong buat transkrip dari audio berikut dan identifikasi resep, bahan, atau tips memasak yang disebutkan. Jelaskan dalam bahasa Indonesia.',
+  };
+
+  try {
+    const formData = new FormData();
+    formData.append(fieldNameMap[attachmentType], file);
+    formData.append('prompt', userText || defaultPromptMap[attachmentType]);
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 45000); // 45s for file uploads
+
+    const response = await fetch(endpointMap[attachmentType], {
+      method: 'POST',
+      body: formData,
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (response.ok) {
+      const data = await response.json();
+      if (data.result) {
+        const matched = findMatchingRecipes(data.result.toLowerCase());
+        return {
+          text: data.result,
+          suggestedRecipes: matched.slice(0, 3),
+          mode: 'live',
+        };
+      }
+    }
+
+    // Baca pesan error dari backend jika ada
+    let errorMsg = '';
+    try {
+      const errData = await response.json();
+      errorMsg = errData.message || '';
+    } catch { /* ignore */ }
+
+    if (response.status === 413 || errorMsg.toLowerCase().includes('besar')) {
+      return {
+        text: 'Waduh, file yang kamu kirim terlalu besar nih 😅 Coba kirim file yang lebih kecil ya, maksimal 20MB!',
+        mode: 'demo',
+      };
+    }
+
+    throw new Error(errorMsg || `HTTP ${response.status}`);
+  } catch (err: unknown) {
+    console.error('[askAIChefWithFile]', err);
+    const fileTypeLabel = attachmentType === 'image' ? 'foto' : attachmentType === 'audio' ? 'audio' : 'dokumen';
+    const isTimeout = err instanceof Error && err.name === 'AbortError';
+    return {
+      text: isTimeout
+        ? `File ${fileTypeLabel}mu membutuhkan waktu lebih lama untuk diproses. Coba lagi dengan file yang lebih kecil ya! 🙏`
+        : `Hmm, sepertinya ada kendala saat memproses ${fileTypeLabel} ini 😔 Pastikan file tidak rusak dan coba lagi ya!`,
+      mode: 'demo',
+    };
+  }
+}
+
 
 // Helpers
 function findExactOrCloseRecipe(query: string): Recipe | undefined {

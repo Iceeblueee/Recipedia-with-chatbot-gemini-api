@@ -45,10 +45,19 @@ export interface Recipe {
   isPopular?: boolean;
 }
 
+export interface AttachmentInfo {
+  name: string;
+  type: 'image' | 'audio' | 'document';
+  mimeType: string;
+  previewUrl?: string; // object URL for images
+  size: number;
+}
+
 export interface ChatMessage {
   id: string;
   sender: 'user' | 'assistant';
   content: string;
   timestamp: string;
   suggestedRecipes?: Recipe[];
+  attachment?: AttachmentInfo;
 }
