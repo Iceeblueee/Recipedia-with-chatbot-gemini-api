@@ -11,7 +11,7 @@
 Proyek ini terbagi menjadi dua bagian utama:
 
 ```
-Hacktiv8/
+Recipedia/
 ├── backend/      → API server (Node.js + Express + Google Gemini AI)
 └── frontend/     → Antarmuka pengguna (React + Vite + TypeScript + Tailwind CSS)
 ```
